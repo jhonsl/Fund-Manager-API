@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     # --- App ---
     environment: str = "local"  # local | dev | prod
     debug: bool = False
+    port: int = 8080
 
     # --- AWS / DynamoDB ---
     aws_region: str = "us-east-1"

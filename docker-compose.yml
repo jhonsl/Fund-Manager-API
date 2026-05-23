@@ -1,0 +1,70 @@
+# Port map (host -> container). Host ports chosen to avoid clashes with other
+# local projects; inter-container traffic always uses the internal ports.
+#   8080 -> API (uvicorn)            :8080
+#   8002 -> DynamoDB Local           :8000  (host 8000 used by another project)
+#   8001 -> DynamoDB Admin (web UI)  :8001
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: fund-manager-api
+    ports:
+      - "8080:8080"
+    environment:
+      ENVIRONMENT: local
+      DEBUG: "true"
+      AWS_REGION: us-east-1
+      DYNAMODB_TABLE_NAME: fund_manager
+      # Inside the Docker network, reach DynamoDB by its service name, not localhost.
+      DYNAMODB_ENDPOINT_URL: http://dynamodb-local:8000
+      # Dummy credentials required by boto3 against DynamoDB Local.
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+    volumes:
+      # Mount source for hot-reload during development.
+      - ./app:/app/app
+    # Override the image's production CMD to enable auto-reload in dev.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
+    depends_on:
+      dynamodb-local:
+        condition: service_healthy
+
+  dynamodb-local:
+    image: amazon/dynamodb-local:2.5.2
+    container_name: fund-manager-dynamodb
+    ports:
+      - "8002:8000"
+    # Run as root so the process can write its SQLite file into the mounted
+    # volume. Without this, the volume is owned by root while the default
+    # `dynamodblocal` user cannot create shared-local-instance.db -> SQLite
+    # "unable to open database file" and every query hangs.
+    user: root
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath ./data"
+    working_dir: /home/dynamodblocal
+    volumes:
+      - dynamodb-data:/home/dynamodblocal/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:8000 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Web UI to inspect tables and items at http://localhost:8001
+  dynamodb-admin:
+    image: aaronshaf/dynamodb-admin:4.6.1
+    container_name: fund-manager-dynamodb-admin
+    ports:
+      - "8001:8001"
+    environment:
+      DYNAMO_ENDPOINT: http://dynamodb-local:8000
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: local
+      AWS_SECRET_ACCESS_KEY: local
+    depends_on:
+      dynamodb-local:
+        condition: service_healthy
+
+volumes:
+  dynamodb-data:

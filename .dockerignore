@@ -1,0 +1,35 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Git / IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# Local env & secrets
+.env
+.env.*
+!.env.example
+
+# Docs / infra not needed in the image
+*.md
+!README.md
+infra/
+tests/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -26,16 +26,55 @@ copy .env.example .env         # Windows
 # cp .env.example .env          # macOS / Linux
 ```
 
-## Run
+## Run with Docker (recommended)
+
+The whole stack — API, DynamoDB Local, and a web admin UI — runs with one command.
+Requires Docker Desktop running.
 
 ```bash
-uvicorn app.main:app --reload
+docker compose up -d --build   # build + start everything
+docker compose ps              # check status
+docker compose logs -f api     # follow API logs
+docker compose down            # stop (keeps data)
+docker compose down -v         # stop and wipe data
 ```
+
+Ports (host -> container):
+
+| Service        | Host port | URL                   |
+| -------------- | --------- | --------------------- |
+| API (uvicorn)  | 8080      | http://localhost:8080 |
+| DynamoDB Local | 8002      | http://localhost:8002 |
+| DynamoDB Admin | 8001      | http://localhost:8001 |
+
+> The API container has hot-reload enabled (the `./app` folder is mounted), so
+> code edits reload automatically — no rebuild needed for source changes.
 
 Then open:
 
-- API root health check: http://localhost:8000/health
-- Interactive docs (Swagger UI): http://localhost:8000/docs
+- Health check: http://localhost:8080/health
+- Interactive docs (Swagger UI): http://localhost:8080/docs
+- DynamoDB Admin (browse tables/items): http://localhost:8001
+
+## Inspecting the database
+
+The bundled **DynamoDB Admin** web UI (http://localhost:8001) lists tables and
+items with no extra setup.
+
+For a richer, visual tool you can also use AWS's official **NoSQL Workbench**
+(desktop app): add a *DynamoDB local* connection pointing to `localhost:8002`.
+See https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/workbench.settingup.html
+
+## Run without Docker
+
+Point your `.env` at the DynamoDB Local host port (`DYNAMODB_ENDPOINT_URL=http://localhost:8002`),
+then:
+
+```bash
+python -m app.main         # uses PORT from settings (default :8080)
+# or explicitly:
+uvicorn app.main:app --reload --port 8080
+```
 
 ## Test
 
