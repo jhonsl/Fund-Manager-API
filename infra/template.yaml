@@ -1,0 +1,249 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Fund Manager API (BTG Pactual challenge) - serverless deployment.
+  FastAPI runs as a container-image Lambda (via Mangum) behind an HTTP API
+  Gateway. State lives in a single DynamoDB table (PK/SK + GSI1, TTL). The JWT
+  signing secret is stored in Secrets Manager and injected as an env var. The
+  function's execution role grants least-privilege access to the table, the
+  secret, and SES/SNS for notifications.
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, prod]
+    Description: Deployment environment. Drives the app's ENVIRONMENT setting.
+
+  ImageUri:
+    Type: String
+    Description: >
+      Full ECR image URI for the Lambda container, including tag/digest, e.g.
+      123456789012.dkr.ecr.us-east-1.amazonaws.com/fund-manager-api:latest
+      Build & push the Dockerfile's `lambda` stage before deploying.
+
+  TableName:
+    Type: String
+    Default: fund_manager
+    Description: DynamoDB single-table name (must match DYNAMODB_TABLE_NAME).
+
+  JwtAccessTokenExpireMinutes:
+    Type: Number
+    Default: 30
+    Description: Access-token lifetime in minutes.
+
+  LambdaMemorySize:
+    Type: Number
+    Default: 512
+    Description: Lambda memory (MB). Also scales CPU proportionally.
+
+  LambdaTimeout:
+    Type: Number
+    Default: 30
+    Description: Lambda timeout in seconds.
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+Resources:
+
+  # --- Data: single-table DynamoDB (mirrors scripts/create_table.py) -------
+  FundManagerTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      # Auto-expire idempotency records via the `ttl` attribute.
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      # Encryption at rest (AWS-owned key by default; here we make it explicit).
+      SSESpecification:
+        SSEEnabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # --- Security: JWT signing secret ----------------------------------------
+  JwtSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "fund-manager-api/${Environment}/jwt-secret-key"
+      Description: HS256 signing key for the Fund Manager API access tokens.
+      GenerateSecretString:
+        # Generate a strong random secret as raw text (no JSON wrapper) so it can
+        # be injected directly as the JWT_SECRET_KEY env var.
+        PasswordLength: 64
+        ExcludePunctuation: true
+
+  # --- Logs: explicit groups with retention (avoid infinite-retention auto
+  # groups CloudFormation otherwise wouldn't manage). ----------------------
+  ApiFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/fund-manager-api-${Environment}"
+      RetentionInDays: 14
+
+  HttpApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/http-api/fund-manager-api-${Environment}"
+      RetentionInDays: 14
+
+  # --- Compute: container-image Lambda running FastAPI via Mangum ----------
+  ApiFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: ApiFunctionLogGroup
+    Properties:
+      FunctionName: !Sub "fund-manager-api-${Environment}"
+      PackageType: Image
+      Code:
+        ImageUri: !Ref ImageUri
+      Role: !GetAtt ApiFunctionRole.Arn
+      MemorySize: !Ref LambdaMemorySize
+      Timeout: !Ref LambdaTimeout
+      Architectures:
+        - x86_64
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          # AWS_REGION is injected automatically by the Lambda runtime (it is a
+          # reserved variable and cannot be set here); the app reads it as-is.
+          DYNAMODB_TABLE_NAME: !Ref TableName
+          # Empty endpoint => boto3 talks to real AWS DynamoDB.
+          DYNAMODB_ENDPOINT_URL: ""
+          JWT_ALGORITHM: HS256
+          JWT_ACCESS_TOKEN_EXPIRE_MINUTES: !Ref JwtAccessTokenExpireMinutes
+          # Resolve the secret value at deploy time and inject it as an env var.
+          # The app reads JWT_SECRET_KEY from the environment (pydantic-settings),
+          # so it never needs to call Secrets Manager itself.
+          JWT_SECRET_KEY: !Sub "{{resolve:secretsmanager:${JwtSecret}}}"
+
+  # --- IAM: least-privilege execution role ---------------------------------
+  ApiFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "fund-manager-api-${Environment}-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      # CloudWatch Logs for the function.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: dynamodb-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                  - dynamodb:TransactWriteItems
+                  - dynamodb:BatchGetItem
+                  - dynamodb:DeleteItem
+                Resource:
+                  - !GetAtt FundManagerTable.Arn
+                  - !Sub "${FundManagerTable.Arn}/index/*"
+        - PolicyName: notifications
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - sns:Publish
+                Resource: "*"  # SES/SNS publish is not resource-scoped here.
+
+  # API Gateway needs explicit permission to invoke the function.
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ApiFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*"
+
+  # --- Edge: HTTP API Gateway (proxy everything to the Lambda) -------------
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "fund-manager-api-${Environment}"
+      ProtocolType: HTTP
+
+  HttpApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ApiFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  HttpApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "$default"  # proxy all methods/paths to FastAPI
+      Target: !Sub "integrations/${HttpApiIntegration}"
+
+  HttpApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: "$default"
+      AutoDeploy: true
+      AccessLogSettings:
+        DestinationArn: !GetAtt HttpApiLogGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId","ip":"$context.identity.sourceIp",
+          "method":"$context.httpMethod","path":"$context.path",
+          "status":"$context.status","latency":"$context.responseLatency"}
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+  ApiBaseUrl:
+    Description: Base URL of the deployed API (append /docs, /health, /api/v1/...).
+    Value: !GetAtt HttpApi.ApiEndpoint
+
+  TableNameOut:
+    Description: DynamoDB table name (use when running seed scripts).
+    Value: !Ref TableName
+
+  JwtSecretArn:
+    Description: ARN of the JWT signing secret in Secrets Manager.
+    Value: !Ref JwtSecret
+
+  FunctionName:
+    Description: Lambda function name.
+    Value: !Ref ApiFunction

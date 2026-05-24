@@ -47,6 +47,15 @@ def create_app() -> FastAPI:
 app = create_app()
 
 
+# AWS Lambda entrypoint. Mangum adapts the ASGI app to the Lambda/API Gateway
+# event-handler contract. Imported lazily so local/dev runs (and tests) never
+# require mangum to be installed at import time of this module's other users.
+def lambda_handler(event: dict, context: object) -> dict:  # pragma: no cover
+    from mangum import Mangum
+
+    return Mangum(app)(event, context)
+
+
 if __name__ == "__main__":
     import uvicorn
 

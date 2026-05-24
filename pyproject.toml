@@ -14,6 +14,7 @@ dependencies = [
     "python-jose[cryptography]>=3.3.0",
     "bcrypt>=4.0.0",
     "python-multipart>=0.0.9",
+    "mangum>=0.18.0",  # ASGI->Lambda adapter (AWS API Gateway deployment)
 ]
 
 [project.optional-dependencies]
