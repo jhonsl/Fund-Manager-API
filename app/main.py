@@ -4,9 +4,14 @@ Bootstraps the app, wiring is intentionally minimal for now: only app metadata
 and a health check. Feature routers will be registered here as they are built.
 """
 
+import logging
+
 from fastapi import FastAPI
 
 from app.infrastructure.config.settings import get_settings
+from app.presentation.api.middleware.exception_handlers import (
+    register_exception_handlers,
+)
 from app.presentation.api.v1.router import api_v1_router
 
 settings = get_settings()
@@ -14,10 +19,15 @@ settings = get_settings()
 
 def create_app() -> FastAPI:
     """Application factory. Keeps app creation testable and import-safe."""
+    # Ensure our INFO logs (e.g. simulated notifications) are visible.
+    logging.basicConfig(level=logging.INFO)
+
+    # Note: we intentionally do NOT pass debug=settings.debug. FastAPI/Starlette
+    # debug mode returns raw tracebacks on 500s and bypasses our exception
+    # handler — leaking internals. Our handler always returns a clean 500 instead.
     app = FastAPI(
         title="Fund Manager API",
         version="0.1.0",
-        debug=settings.debug,
     )
 
     @app.get("/health", tags=["health"])
@@ -27,6 +37,9 @@ def create_app() -> FastAPI:
 
     # Versioned API routers. Each version owns its own prefix in code.
     app.include_router(api_v1_router)
+
+    # Translate domain exceptions into HTTP responses.
+    register_exception_handlers(app)
 
     return app
 

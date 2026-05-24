@@ -7,8 +7,9 @@ Feature routers (funds, transactions, ...) are included here as they are built.
 
 from fastapi import APIRouter
 
-api_v1_router = APIRouter(prefix="/api/v1")
+from app.presentation.api.v1.routes import auth, clients, funds
 
-# Feature routers will be registered here, e.g.:
-# from app.presentation.api.v1.routes import funds
-# api_v1_router.include_router(funds.router)
+api_v1_router = APIRouter(prefix="/api/v1")
+api_v1_router.include_router(auth.router)
+api_v1_router.include_router(funds.router)
+api_v1_router.include_router(clients.router)

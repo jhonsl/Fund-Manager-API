@@ -6,7 +6,10 @@ development or from real environment variables in AWS. Never hardcode secrets.
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEFAULT_JWT_SECRET = "change-me-in-production"
 
 
 class Settings(BaseSettings):
@@ -30,10 +33,19 @@ class Settings(BaseSettings):
     # Optional local DynamoDB endpoint (e.g. http://localhost:8000). Empty = real AWS.
     dynamodb_endpoint_url: str | None = None
 
-    # --- Security (placeholders; wired up when auth is implemented) ---
-    jwt_secret_key: str = "change-me-in-production"
+    # --- Security ---
+    jwt_secret_key: str = _DEFAULT_JWT_SECRET
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
+
+    @model_validator(mode="after")
+    def _reject_default_secret_in_prod(self) -> "Settings":
+        if self.environment == "prod" and self.jwt_secret_key == _DEFAULT_JWT_SECRET:
+            raise ValueError(
+                "JWT_SECRET_KEY must be overridden in production "
+                "(set it via env var / AWS Secrets Manager)."
+            )
+        return self
 
 
 @lru_cache
