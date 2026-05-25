@@ -47,3 +47,13 @@ def get_table() -> Any:
     """Return the configured single table as a boto3 Table resource."""
     settings = get_settings()
     return get_dynamodb_resource().Table(settings.dynamodb_table_name)
+
+
+def get_aws_client(service: str) -> Any:
+    """Return a boto3 client for an AWS service (e.g. "ses", "sns").
+
+    Uses the same region/credential resolution as DynamoDB (default chain / IAM
+    role on AWS). No endpoint override is applied — these are real AWS services.
+    """
+    settings = get_settings()
+    return boto3.client(service, region_name=settings.aws_region)

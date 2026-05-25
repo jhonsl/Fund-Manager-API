@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     # Optional local DynamoDB endpoint (e.g. http://localhost:8000). Empty = real AWS.
     dynamodb_endpoint_url: str | None = None
 
+    # --- Notifications ---
+    # "log" (default) writes notifications to the log; "aws" sends real SES/SNS.
+    notifications_backend: str = "log"  # log | aws
+    # Verified SES sender (the "From" address). Required when backend is "aws".
+    ses_sender_email: str = "no-reply@example.com"
+    # SNS SMS sender id (where supported by the destination country/carrier).
+    sns_sender_id: str = "BTGPactual"
+
     # --- Security ---
     jwt_secret_key: str = _DEFAULT_JWT_SECRET
     jwt_algorithm: str = "HS256"

@@ -19,6 +19,12 @@ from app.application.use_cases.list_funds import ListFundsUseCase
 from app.application.use_cases.login import LoginUseCase
 from app.application.use_cases.subscribe_to_fund import SubscribeToFundUseCase
 from app.domain.repositories.fund_manager_repository import FundManagerRepository
+from app.domain.value_objects.enums import NotificationPreference
+from app.infrastructure.config.settings import get_settings
+from app.infrastructure.notifications.aws_notification_sender import (
+    SesEmailSender,
+    SnsSmsSender,
+)
 from app.infrastructure.notifications.dispatcher import LogNotificationDispatcher
 from app.infrastructure.persistence.dynamodb.fund_manager_repository import (
     DynamoDbFundManagerRepository,
@@ -32,6 +38,18 @@ def get_repository() -> FundManagerRepository:
 
 
 def get_dispatcher() -> NotificationDispatcher:
+    """Pick notification senders by backend: real SES/SNS in "aws", else log.
+
+    Both backends route by client preference (Strategy) through the same
+    dispatcher; only the concrete senders differ.
+    """
+    if get_settings().notifications_backend == "aws":
+        return LogNotificationDispatcher(
+            senders={
+                NotificationPreference.EMAIL: SesEmailSender(),
+                NotificationPreference.SMS: SnsSmsSender(),
+            }
+        )
     return LogNotificationDispatcher()
 
 
