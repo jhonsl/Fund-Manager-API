@@ -167,8 +167,10 @@ Resources:
                 Action:
                   - dynamodb:GetItem
                   - dynamodb:PutItem
+                  - dynamodb:UpdateItem  # used inside TransactWriteItems (balance debit/credit)
                   - dynamodb:Query
                   - dynamodb:TransactWriteItems
+                  - dynamodb:ConditionCheckItem
                   - dynamodb:BatchGetItem
                   - dynamodb:DeleteItem
                 Resource:
